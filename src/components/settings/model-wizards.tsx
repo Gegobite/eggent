@@ -116,7 +116,8 @@ function useModels(
   apiKey: string,
   requiresApiKey: boolean,
   type: "chat" | "embedding" = "chat",
-  baseUrl?: string
+  baseUrl?: string,
+  allowInsecureTls?: boolean
 ) {
   const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(false);
@@ -138,6 +139,9 @@ function useModels(
       } else if (providerConfig?.baseUrl) {
         params.set("baseUrl", providerConfig.baseUrl);
       }
+      if (allowInsecureTls) {
+        params.set("allowInsecureTls", "1");
+      }
 
       const response = await fetch(`/api/models?${params}`);
       const payload = (await response.json()) as {
@@ -158,6 +162,7 @@ function useModels(
           "ollama",
           "anthropic",
           "google",
+          "custom",
         ];
         if (!dynamicProviders.includes(provider) && providerConfig?.models?.length) {
           setModels([...providerConfig.models]);
@@ -175,6 +180,7 @@ function useModels(
         "ollama",
         "anthropic",
         "google",
+        "custom",
       ];
       if (!dynamicProviders.includes(provider) && providerConfig?.models?.length) {
         setModels([...providerConfig.models]);
@@ -184,7 +190,7 @@ function useModels(
     } finally {
       setLoading(false);
     }
-  }, [provider, apiKey, requiresApiKey, type, baseUrl]);
+  }, [provider, apiKey, requiresApiKey, type, baseUrl, allowInsecureTls]);
 
   useEffect(() => {
     void fetchModels();
@@ -226,7 +232,8 @@ export function ChatModelWizard({
     apiKey,
     requiresApiKey,
     "chat",
-    settings.chatModel.baseUrl
+    settings.chatModel.baseUrl,
+    settings.chatModel.allowInsecureTls
   );
 
   return (
@@ -260,8 +267,12 @@ export function ChatModelWizard({
             if (nextProvider === "ollama") {
               updateSettings("chatModel.baseUrl", "http://localhost:11434/v1");
               updateSettings("chatModel.apiKey", "");
+              updateSettings("chatModel.allowInsecureTls", false);
             } else {
               updateSettings("chatModel.baseUrl", "");
+              if (nextProvider !== "custom") {
+                updateSettings("chatModel.allowInsecureTls", false);
+              }
             }
           }}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -272,7 +283,6 @@ export function ChatModelWizard({
               {providerOption.name}
             </option>
           ))}
-          <option value="custom">Custom (OpenAI-compatible)</option>
         </select>
       </div>
 
@@ -335,6 +345,19 @@ export function ChatModelWizard({
         </div>
       )}
 
+      {provider === "custom" && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={Boolean(settings.chatModel.allowInsecureTls)}
+            onChange={(event) =>
+              updateSettings("chatModel.allowInsecureTls", event.target.checked)
+            }
+          />
+          Allow insecure TLS (self-signed cert)
+        </label>
+      )}
+
       <div
         className={`space-y-2 transition-all duration-300 ${
           !hasApiKey ? "opacity-40 pointer-events-none" : ""
@@ -351,6 +374,12 @@ export function ChatModelWizard({
           disabled={!hasApiKey}
           onChange={(value) => updateSettings("chatModel.model", value)}
           placeholder="Select model..."
+        />
+        <Input
+          value={model}
+          onChange={(event) => updateSettings("chatModel.model", event.target.value)}
+          placeholder="Or enter model id manually (e.g. gpt-4o-mini, qwen/qwen3-32b)"
+          disabled={!hasApiKey}
         />
       </div>
 
@@ -432,7 +461,8 @@ export function EmbeddingsModelWizard({
     apiKey,
     requiresApiKey,
     "embedding",
-    settings.embeddingsModel.baseUrl
+    settings.embeddingsModel.baseUrl,
+    settings.embeddingsModel.allowInsecureTls
   );
 
   const knownDimensions: Record<string, number> = {
@@ -485,8 +515,12 @@ export function EmbeddingsModelWizard({
             if (nextProvider === "ollama") {
               updateSettings("embeddingsModel.baseUrl", "http://localhost:11434/v1");
               updateSettings("embeddingsModel.apiKey", "");
+              updateSettings("embeddingsModel.allowInsecureTls", false);
             } else {
               updateSettings("embeddingsModel.baseUrl", "");
+              if (nextProvider !== "custom") {
+                updateSettings("embeddingsModel.allowInsecureTls", false);
+              }
             }
           }}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -539,7 +573,7 @@ export function EmbeddingsModelWizard({
         </div>
       )}
 
-      {provider === "ollama" && (
+      {(provider === "ollama" || provider === "custom") && (
         <div
           className={`space-y-2 transition-all duration-300 ${
             !hasProvider ? "opacity-40 pointer-events-none" : ""
@@ -553,10 +587,27 @@ export function EmbeddingsModelWizard({
             onChange={(event) =>
               updateSettings("embeddingsModel.baseUrl", event.target.value)
             }
-            placeholder="http://localhost:11434/v1"
+            placeholder={
+              provider === "ollama"
+                ? "http://localhost:11434/v1"
+                : "https://api.example.com/v1"
+            }
             disabled={!hasProvider}
           />
         </div>
+      )}
+
+      {provider === "custom" && (
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={Boolean(settings.embeddingsModel.allowInsecureTls)}
+            onChange={(event) =>
+              updateSettings("embeddingsModel.allowInsecureTls", event.target.checked)
+            }
+          />
+          Allow insecure TLS (self-signed cert)
+        </label>
       )}
 
       <div
@@ -608,6 +659,23 @@ export function EmbeddingsModelWizard({
         <p className="text-[10px] text-muted-foreground">
           Dimensions are auto-detected for known models. Adjust if necessary.
         </p>
+        <Input
+          value={model}
+          onChange={(event) => {
+            const value = event.target.value;
+            updateSettings("embeddingsModel.model", value);
+            let dimensions = 1536;
+            for (const [pattern, knownValue] of Object.entries(knownDimensions)) {
+              if (value.includes(pattern)) {
+                dimensions = knownValue;
+                break;
+              }
+            }
+            updateSettings("embeddingsModel.dimensions", dimensions);
+          }}
+          placeholder="Or enter embedding model id manually"
+          disabled={!hasApiKey}
+        />
       </div>
     </section>
   );

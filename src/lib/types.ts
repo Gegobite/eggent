@@ -9,6 +9,7 @@ export interface ModelConfig {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  allowInsecureTls?: boolean;
   temperature?: number;
   maxTokens?: number;
 }
@@ -21,6 +22,7 @@ export interface AppSettings {
     model: string;
     apiKey?: string;
     baseUrl?: string;
+    allowInsecureTls?: boolean;
     dimensions?: number;
   };
   codeExecution: {

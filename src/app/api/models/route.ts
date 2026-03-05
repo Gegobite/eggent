@@ -2,11 +2,49 @@ import { NextRequest } from "next/server";
 import { MODEL_PROVIDERS } from "@/lib/providers/model-config";
 import { getSettings } from "@/lib/storage/settings-store";
 
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+
+function parseTruthyFlag(value: string | null): boolean {
+    if (!value) return false;
+    return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+async function fetchWithTls(url: string, init: RequestInit, allowInsecureTls: boolean): Promise<Response> {
+    if (!allowInsecureTls) return fetch(url, init);
+    const prev = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    try {
+        return await fetch(url, init);
+    } finally {
+        if (prev === undefined) {
+            delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+        } else {
+            process.env.NODE_TLS_REJECT_UNAUTHORIZED = prev;
+        }
+    }
+}
+
+function normalizeBaseUrl(rawBaseUrl: string | null, fallbackBaseUrl: string): string {
+    const rawValue = (rawBaseUrl || fallbackBaseUrl).trim();
+    const hasScheme = /^[a-z][a-z\d+\-.]*:\/\//i.test(rawValue);
+    const hostLike = rawValue.split("/")[0] || "";
+    const withScheme = hasScheme
+        ? rawValue
+        : `${LOCAL_HOSTNAMES.has(hostLike) ? "http" : "https"}://${rawValue}`;
+
+    const url = new URL(withScheme);
+    if (url.pathname === "" || url.pathname === "/") {
+        url.pathname = "/v1";
+    }
+    return url.toString().replace(/\/$/, "");
+}
+
 export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url);
     const provider = searchParams.get("provider") || "";
     let apiKey = searchParams.get("apiKey") || "";
     const type = searchParams.get("type") || "chat"; // "chat" | "embedding"
+    let allowInsecureTls = parseTruthyFlag(searchParams.get("allowInsecureTls"));
 
     // If apiKey is masked or missing, try to get it from server-side settings
     if (!apiKey || apiKey.includes("****")) {
@@ -14,8 +52,10 @@ export async function GET(req: NextRequest) {
             const settings = await getSettings();
             if (type === "chat" && settings.chatModel.provider === provider) {
                 apiKey = settings.chatModel.apiKey || "";
+                allowInsecureTls = allowInsecureTls || Boolean(settings.chatModel.allowInsecureTls);
             } else if (type === "embedding" && settings.embeddingsModel.provider === provider) {
                 apiKey = settings.embeddingsModel.apiKey || "";
+                allowInsecureTls = allowInsecureTls || Boolean(settings.embeddingsModel.allowInsecureTls);
             } else if (provider === "openrouter" && process.env.OPENROUTER_API_KEY) {
                 // Special case for environment variables if not in settings explicitly
                 apiKey = process.env.OPENROUTER_API_KEY;
@@ -92,6 +132,40 @@ export async function GET(req: NextRequest) {
                     id: m.name,
                     name: m.name,
                 }));
+                break;
+            }
+
+            case "custom": {
+                const baseUrl = normalizeBaseUrl(
+                    searchParams.get("baseUrl"),
+                    "http://localhost:11434/v1"
+                );
+                const res = await fetchWithTls(
+                    `${baseUrl}/models`,
+                    {
+                        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+                    },
+                    allowInsecureTls
+                );
+                if (!res.ok) throw new Error(`OpenAI-compatible API error: ${res.status}`);
+                const data = await res.json();
+
+                const rawModels = Array.isArray(data?.data)
+                    ? data.data
+                    : Array.isArray(data?.models)
+                        ? data.models
+                        : [];
+
+                models = rawModels
+                    .filter((m: { id?: string }) => typeof m?.id === "string" && m.id.length > 0)
+                    .filter((m: { id: string }) => {
+                        if (type === "embedding") {
+                            return m.id.includes("embed") || m.id.includes("embedding");
+                        }
+                        return true;
+                    })
+                    .map((m: { id: string }) => ({ id: m.id, name: m.id }))
+                    .sort((a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id));
                 break;
             }
 

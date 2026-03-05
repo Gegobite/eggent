@@ -50,4 +50,9 @@ export const MODEL_PROVIDERS: Record<string, ProviderConfig> = {
     baseUrl: "http://localhost:11434",
     requiresApiKey: false,
   },
+  custom: {
+    name: "Custom (OpenAI-compatible)",
+    models: [],
+    requiresApiKey: true,
+  },
 };

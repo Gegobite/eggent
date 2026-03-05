@@ -203,6 +203,7 @@ Main environment variables:
 | `ANTHROPIC_API_KEY` | No | Anthropic provider |
 | `GOOGLE_API_KEY` | No | Google provider |
 | `OPENROUTER_API_KEY` | No | OpenRouter provider |
+| custom OpenAI-compatible API key/base URL | No | Configure in Settings -> Model wizards (`Custom (OpenAI-compatible)` provider) |
 | `TAVILY_API_KEY` | No | Web search integration |
 | `EXTERNAL_API_TOKEN` | No (auto-generated in setup scripts) | External message API auth token |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram bot token |

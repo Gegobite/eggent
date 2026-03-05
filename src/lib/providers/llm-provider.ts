@@ -15,6 +15,11 @@ type OpenAICompatibleSettings = {
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
 
+function enableInsecureTlsGlobally(allowInsecureTls?: boolean): void {
+  if (!allowInsecureTls) return;
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+}
+
 function normalizeBaseUrl(rawBaseUrl: string | undefined, settings: {
   providerName: string;
   fallbackBaseUrl?: string;
@@ -57,6 +62,7 @@ function createOpenAICompatibleChatModel(
   config: ModelConfig,
   settings: OpenAICompatibleSettings
 ): LanguageModel {
+  enableInsecureTlsGlobally(config.allowInsecureTls);
   const baseURL = normalizeBaseUrl(config.baseUrl, settings);
   const provider = createOpenAI({
     apiKey: settings.apiKey,
@@ -71,7 +77,9 @@ function createOpenAICompatibleEmbeddingModel(config: {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  allowInsecureTls?: boolean;
 }, settings: OpenAICompatibleSettings) {
+  enableInsecureTlsGlobally(config.allowInsecureTls);
   const baseURL = normalizeBaseUrl(config.baseUrl, settings);
   const provider = createOpenAI({
     apiKey: settings.apiKey,
@@ -148,6 +156,7 @@ export function createEmbeddingModel(config: {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  allowInsecureTls?: boolean;
 }) {
   switch (config.provider) {
     case "openai":
