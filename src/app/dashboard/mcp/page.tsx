@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Globe, Loader2, Terminal, Wrench } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
@@ -74,14 +75,19 @@ function normalizeServers(input: unknown): McpServerItem[] {
   return servers;
 }
 
+const EMPTY_MCP_JSON = JSON.stringify({ mcpServers: {} }, null, 2);
+
 export default function McpPage() {
   const { projects, setProjects, activeProjectId } = useAppStore();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [servers, setServers] = useState<McpServerItem[]>([]);
   const [rawContent, setRawContent] = useState<string | null>(null);
+  const [draftContent, setDraftContent] = useState(EMPTY_MCP_JSON);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [statusTone, setStatusTone] = useState<"success" | "error" | null>(null);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
@@ -131,7 +137,9 @@ export default function McpPage() {
     if (!projectId) {
       setServers([]);
       setRawContent(null);
+      setDraftContent(EMPTY_MCP_JSON);
       setStatusMessage(null);
+      setStatusTone(null);
       setLoading(false);
       return;
     }
@@ -139,6 +147,7 @@ export default function McpPage() {
     try {
       setLoading(true);
       setStatusMessage(null);
+      setStatusTone(null);
       const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/mcp`);
       const payload = await res.json();
 
@@ -148,21 +157,74 @@ export default function McpPage() {
             ? payload.error
             : "Failed to load MCP servers";
         setStatusMessage(message);
+        setStatusTone("error");
         setServers([]);
         setRawContent(null);
+        setDraftContent(EMPTY_MCP_JSON);
         return;
       }
 
-      setRawContent(typeof payload?.content === "string" ? payload.content : null);
+      const content =
+        typeof payload?.content === "string" ? payload.content : null;
+      setRawContent(content);
+      setDraftContent(content ?? EMPTY_MCP_JSON);
       setServers(normalizeServers(payload?.servers));
     } catch {
       setStatusMessage("Failed to load MCP servers");
+      setStatusTone("error");
       setServers([]);
       setRawContent(null);
+      setDraftContent(EMPTY_MCP_JSON);
     } finally {
       setLoading(false);
     }
   }
+
+  async function handleSaveRawContent() {
+    if (!selectedProjectId) return;
+
+    try {
+      setSaving(true);
+      setStatusMessage(null);
+      setStatusTone(null);
+
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(selectedProjectId)}/mcp`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: draftContent }),
+        }
+      );
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : "Failed to save MCP servers"
+        );
+      }
+
+      const content =
+        typeof payload?.content === "string" ? payload.content : draftContent;
+      setRawContent(content);
+      setDraftContent(content);
+      setServers(normalizeServers(payload?.servers));
+      setStatusMessage("MCP configuration saved.");
+      setStatusTone("success");
+    } catch (error) {
+      setStatusMessage(
+        error instanceof Error ? error.message : "Failed to save MCP servers"
+      );
+      setStatusTone("error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const baselineContent = rawContent ?? EMPTY_MCP_JSON;
+  const hasDraftChanges = draftContent !== baselineContent;
+  const canSaveDraft = rawContent === null || hasDraftChanges;
 
   const filteredServers = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -188,7 +250,7 @@ export default function McpPage() {
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">MCP Servers</h2>
                 <p className="text-sm text-muted-foreground">
-                  View MCP servers configured for each project from
+                  View and edit MCP servers configured for each project from
                   <span className="font-mono"> .meta/mcp/servers.json </span>
                   and switch between projects.
                 </p>
@@ -224,7 +286,15 @@ export default function McpPage() {
               </div>
 
               {statusMessage && (
-                <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                <div
+                  className={`rounded-md border px-3 py-2 text-sm ${
+                    statusTone === "error"
+                      ? "border-destructive/40 bg-destructive/10 text-destructive"
+                      : statusTone === "success"
+                        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                        : "bg-muted/40"
+                  }`}
+                >
                   {statusMessage}
                 </div>
               )}
@@ -322,15 +392,53 @@ export default function McpPage() {
                 )}
               </div>
 
-              {rawContent ? (
+              {selectedProjectId ? (
                 <div className="rounded-lg border bg-card">
-                  <div className="border-b px-4 py-3">
+                  <div className="flex items-center justify-between border-b px-4 py-3">
                     <h3 className="text-sm font-medium">Raw servers.json</h3>
+                    {!loading && (
+                      <span className="text-xs text-muted-foreground">
+                        Edit JSON directly
+                      </span>
+                    )}
                   </div>
-                  <div className="p-4">
-                    <pre className="max-h-[360px] overflow-auto rounded-lg border bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap break-words">
-                      {rawContent}
-                    </pre>
+                  <div className="space-y-3 p-4">
+                    {!loading && !rawContent && (
+                      <p className="text-xs text-muted-foreground">
+                        `servers.json` does not exist yet for this project. Save to create it.
+                      </p>
+                    )}
+                    <textarea
+                      value={draftContent}
+                      onChange={(e) => setDraftContent(e.target.value)}
+                      placeholder='{"mcpServers": {}}'
+                      rows={10}
+                      disabled={loading || saving}
+                      className="w-full rounded-lg border bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-70"
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button
+                        onClick={handleSaveRawContent}
+                        disabled={loading || saving || !canSaveDraft}
+                        className="gap-2"
+                      >
+                        {saving ? (
+                          <>
+                            <Loader2 className="size-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          "Save servers.json"
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={() => setDraftContent(baselineContent)}
+                        disabled={loading || saving || !hasDraftChanges}
+                      >
+                        Reset
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ) : null}

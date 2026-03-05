@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -18,6 +17,10 @@ export default function ProjectDetailsPage() {
     const router = useRouter();
     const id = params.id as string;
     const [project, setProject] = useState<Project | null>(null);
+    const [instructionsDraft, setInstructionsDraft] = useState("");
+    const [instructionsSaving, setInstructionsSaving] = useState(false);
+    const [instructionsStatus, setInstructionsStatus] = useState<string | null>(null);
+    const [instructionsStatusTone, setInstructionsStatusTone] = useState<"success" | "error" | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -28,6 +31,7 @@ export default function ProjectDetailsPage() {
             })
             .then((data: Project) => {
                 setProject(data);
+                setInstructionsDraft(data.instructions || "");
                 setLoading(false);
             })
             .catch(() => {
@@ -35,6 +39,41 @@ export default function ProjectDetailsPage() {
                 setLoading(false);
             });
     }, [id]);
+
+    async function handleSaveInstructions() {
+        if (!project) return;
+        try {
+            setInstructionsSaving(true);
+            setInstructionsStatus(null);
+            setInstructionsStatusTone(null);
+
+            const res = await fetch(`/api/projects/${project.id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ instructions: instructionsDraft }),
+            });
+            const payload = (await res.json()) as Project | { error?: string };
+            if (!res.ok) {
+                throw new Error(
+                    "error" in payload && typeof payload.error === "string"
+                        ? payload.error
+                        : "Failed to save instructions"
+                );
+            }
+
+            setProject(payload as Project);
+            setInstructionsDraft((payload as Project).instructions || "");
+            setInstructionsStatus("Instructions updated.");
+            setInstructionsStatusTone("success");
+        } catch (error) {
+            setInstructionsStatus(
+                error instanceof Error ? error.message : "Failed to save instructions"
+            );
+            setInstructionsStatusTone("error");
+        } finally {
+            setInstructionsSaving(false);
+        }
+    }
 
     if (loading) {
         return (
@@ -54,6 +93,8 @@ export default function ProjectDetailsPage() {
             </div>
         );
     }
+
+    const instructionsDirty = instructionsDraft !== (project.instructions || "");
 
     return (
         <div className="[--header-height:calc(--spacing(14))]">
@@ -93,8 +134,48 @@ export default function ProjectDetailsPage() {
                                 <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
                                     Instructions
                                 </h3>
-                                <div className="bg-muted/50 p-4 rounded-lg text-sm font-mono whitespace-pre-wrap">
-                                    {project.instructions || "No custom instructions defined."}
+                                {instructionsStatus && (
+                                    <div
+                                        className={`rounded-md border px-3 py-2 text-sm ${
+                                            instructionsStatusTone === "error"
+                                                ? "border-destructive/40 bg-destructive/10 text-destructive"
+                                                : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                                        }`}
+                                    >
+                                        {instructionsStatus}
+                                    </div>
+                                )}
+                                <textarea
+                                    value={instructionsDraft}
+                                    onChange={(e) => setInstructionsDraft(e.target.value)}
+                                    placeholder="No custom instructions defined."
+                                    disabled={instructionsSaving}
+                                    className="min-h-[140px] w-full rounded-lg border bg-muted/50 p-4 text-sm font-mono whitespace-pre-wrap focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-70"
+                                />
+                                <div className="flex items-center gap-2">
+                                    <Button
+                                        size="sm"
+                                        onClick={handleSaveInstructions}
+                                        disabled={instructionsSaving || !instructionsDirty}
+                                        className="gap-2"
+                                    >
+                                        {instructionsSaving ? (
+                                            <>
+                                                <Loader2 className="size-4 animate-spin" />
+                                                Saving...
+                                            </>
+                                        ) : (
+                                            "Save"
+                                        )}
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => setInstructionsDraft(project.instructions || "")}
+                                        disabled={instructionsSaving || !instructionsDirty}
+                                    >
+                                        Reset
+                                    </Button>
                                 </div>
                             </div>
 

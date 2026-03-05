@@ -261,6 +261,80 @@ export async function deleteProjectMcpServer(
   return { success: true, filePath };
 }
 
+export async function saveProjectMcpServersContent(
+  projectId: string,
+  rawContent: string
+): Promise<
+  | {
+      success: true;
+      filePath: string;
+      content: string;
+      servers: McpServerConfig[];
+    }
+  | { success: false; error: string }
+> {
+  const trimmed = rawContent.trim();
+  const defaultContent = JSON.stringify({ mcpServers: {} }, null, 2);
+  const parseTarget = trimmed ? rawContent : defaultContent;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(parseTarget);
+  } catch {
+    return {
+      success: false,
+      error: "Invalid JSON. Provide a valid servers.json object.",
+    };
+  }
+
+  const maybeCursor = parsed as McpServersFileCursor;
+  const isCursorObject =
+    maybeCursor?.mcpServers &&
+    typeof maybeCursor.mcpServers === "object" &&
+    !Array.isArray(maybeCursor.mcpServers);
+
+  const normalized = normalizeMcpServersFile(parsed);
+  if (!normalized && !isCursorObject) {
+    return {
+      success: false,
+      error:
+        "Unsupported format. Use { \"mcpServers\": { ... } } (Cursor format) or { \"servers\": [ ... ] }.",
+    };
+  }
+
+  const servers = normalized?.servers ?? [];
+  for (const server of servers) {
+    const idError = validateMcpServerId(server.id);
+    if (idError) {
+      return { success: false, error: `Invalid server id "${server.id}": ${idError}` };
+    }
+
+    if (server.transport === "http" && !server.url.trim()) {
+      return { success: false, error: `HTTP server "${server.id}" requires a non-empty url.` };
+    }
+    if (server.transport === "stdio" && !server.command.trim()) {
+      return {
+        success: false,
+        error: `STDIO server "${server.id}" requires a non-empty command.`,
+      };
+    }
+  }
+
+  const cursor = normalized ? toCursorMcpServersFile(normalized) : { mcpServers: {} };
+  const content = JSON.stringify(cursor, null, 2);
+
+  await ensureDir(getProjectMcpDir(projectId));
+  const filePath = getProjectMcpServersPath(projectId);
+  await fs.writeFile(filePath, content, "utf-8");
+
+  return {
+    success: true,
+    filePath,
+    content,
+    servers,
+  };
+}
+
 const SKILL_FILE = "SKILL.md";
 
 /** Agent Skills spec: lowercase, numbers, hyphens; no leading/trailing/consecutive hyphens (e.g. pdf, pdf-parsing) */

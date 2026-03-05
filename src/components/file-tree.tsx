@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -63,6 +63,7 @@ function TreeNode({
   const { currentPath, setCurrentPath } = useAppStore();
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[] | null>(null);
+  const childrenRef = useRef<FileEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const downloadHref = useMemo(() => {
     if (type !== "file") return "";
@@ -86,8 +87,12 @@ function TreeNode({
     }
   }, [currentPath, relativePath, type, expanded]);
 
+  useEffect(() => {
+    childrenRef.current = children;
+  }, [children]);
+
   const loadChildren = useCallback(async (force = false, showLoader = true) => {
-    if (!force && children !== null) return; // already loaded
+    if (!force && childrenRef.current !== null) return; // already loaded
     if (showLoader) {
       setLoading(true);
     }
@@ -99,15 +104,22 @@ function TreeNode({
       const res = await fetch(`/api/files?${params}`);
       const data = await res.json();
       if (Array.isArray(data)) {
+        childrenRef.current = data;
         setChildren(data);
       }
     } catch {
-      setChildren((prev) => (prev === null ? [] : prev));
+      setChildren((prev) => {
+        if (prev === null) {
+          childrenRef.current = [];
+          return [];
+        }
+        return prev;
+      });
     }
     if (showLoader) {
       setLoading(false);
     }
-  }, [projectId, relativePath, children]);
+  }, [projectId, relativePath]);
 
   useEffect(() => {
     if (type !== "directory" || !expanded || children !== null) return;

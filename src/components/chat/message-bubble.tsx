@@ -25,6 +25,35 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     (p) => p.type.startsWith("tool-") || p.type === "dynamic-tool"
   );
 
+  // The agent often emits final answers via the `response` tool with no text part.
+  // Surface that output as regular assistant text so the user always sees it.
+  const responseToolText = toolParts
+    .map((part) => {
+      if (part.type === "dynamic-tool") {
+        const dp = part as {
+          toolName?: string;
+          state?: string;
+          output?: unknown;
+        };
+        if (dp.toolName !== "response" || dp.state !== "output-available") return "";
+        return typeof dp.output === "string" ? dp.output : JSON.stringify(dp.output ?? "");
+      }
+
+      if (!part.type.startsWith("tool-")) return "";
+      const tp = part as {
+        type: string;
+        state?: string;
+        output?: unknown;
+      };
+      const toolName = tp.type.replace("tool-", "");
+      if (toolName !== "response" || tp.state !== "output-available") return "";
+      return typeof tp.output === "string" ? tp.output : JSON.stringify(tp.output ?? "");
+    })
+    .filter(Boolean)
+    .join("\n\n");
+
+  const visibleTextContent = textContent || responseToolText;
+
   return (
     <div className="space-y-1">
       {/* Tool invocations */}
@@ -94,7 +123,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       })}
 
       {/* Text content: same font size for user and AI, first line aligned with icon center */}
-      {textContent && (
+      {visibleTextContent && (
         <div className="flex gap-3 py-2 items-start">
           <div
             className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
@@ -111,10 +140,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           </div>
           <div className="flex-1 min-w-0 text-sm leading-7 pt-0.5">
             {isUser ? (
-              <p className="whitespace-pre-wrap">{textContent}</p>
+              <p className="whitespace-pre-wrap">{visibleTextContent}</p>
             ) : (
               <div className="prose prose-sm dark:prose-invert max-w-none text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                <MarkdownContent content={textContent} />
+                <MarkdownContent content={visibleTextContent} />
               </div>
             )}
           </div>

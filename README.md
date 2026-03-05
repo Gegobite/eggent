@@ -1,12 +1,16 @@
 # Eggent
 
 <p align="center">
-  <a href="./docs/assets/eggent-banner.jpeg">
-    <img src="./docs/assets/eggent-banner.jpeg" alt="Eggent banner" width="980" />
+  <a href="./docs/assets/eggent-banner.png">
+    <img src="./docs/assets/eggent-banner.png" alt="Eggent banner" width="980" />
   </a>
 </p>
 
-Eggent is a local-first AI workspace with:
+Eggent is a local-first AI workspace for building a team of focused agents.
+
+Create specialized agents with their own skill packs and MCP servers, switch between them in plain human language, and delegate each task to the agent best trained for it.
+
+Built-in platform capabilities:
 - project-based organization
 - chat and tool-driven workflows
 - memory and knowledge ingestion
@@ -15,6 +19,20 @@ Eggent is a local-first AI workspace with:
 - Telegram integration
 
 The app runs as a Next.js service and stores runtime state on disk (`./data`).
+
+## Releases
+
+- Latest release snapshot: [0.1.1 - Unified Context](./docs/releases/0.1.1-unified-context.md)
+- GitHub release body (ready to paste): [v0.1.1](./docs/releases/github-v0.1.1.md)
+- Release archive: [docs/releases/README.md](./docs/releases/README.md)
+
+## Contributing and Support
+
+- Contributing guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Report a bug: [Bug report form](https://github.com/eggent-ai/eggent/issues/new?template=bug_report.yml)
+- Request a feature: [Feature request form](https://github.com/eggent-ai/eggent/issues/new?template=feature_request.yml)
+- Code of conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+- Security policy: [SECURITY.md](./SECURITY.md)
 
 ## Installation (All Supported Paths)
 
@@ -125,6 +143,40 @@ npm run dev
 
 Open:
 - `http://localhost:3000`
+
+## Updating Eggent
+
+Before updating, back up:
+- `.env`
+- `data/`
+
+If you installed with the one-command installer, run the same command again:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/eggent-ai/eggent/main/scripts/install.sh | bash
+```
+
+It will update the repo in `~/.eggent` (or `EGGENT_INSTALL_DIR` if customized), then rebuild and restart Docker deployment.
+
+If you run Eggent from this repo with Docker:
+
+```bash
+git pull --ff-only origin main
+npm run setup:docker
+```
+
+If you run Eggent from this repo in local production mode (Node + npm):
+
+```bash
+git pull --ff-only origin main
+npm run setup:local
+```
+
+Quick post-update check:
+
+```bash
+curl http://localhost:3000/api/health
+```
 
 ## Runtime Scripts
 
@@ -310,4 +362,4 @@ Dockerfile          # Multi-stage production image build
 
 ## Notes
 
-- The repository currently has no top-level `LICENSE` file.
+- License: MIT. See `LICENSE` at the repository root.

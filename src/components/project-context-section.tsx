@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { BookText, Loader2, Puzzle, Wrench } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import {
   Sheet,
   SheetContent,
@@ -22,9 +23,17 @@ interface ProjectContextSectionProps {
   projectId: string;
 }
 
+const EMPTY_MCP_JSON = JSON.stringify({ mcpServers: {} }, null, 2);
+
 export function ProjectContextSection({ projectId }: ProjectContextSectionProps) {
   const [mcpContent, setMcpContent] = useState<string | null>(null);
+  const [mcpDraft, setMcpDraft] = useState(EMPTY_MCP_JSON);
   const [mcpLoading, setMcpLoading] = useState(true);
+  const [mcpSaving, setMcpSaving] = useState(false);
+  const [mcpStatus, setMcpStatus] = useState<string | null>(null);
+  const [mcpStatusTone, setMcpStatusTone] = useState<"success" | "error" | null>(
+    null
+  );
 
   const [skills, setSkills] = useState<ProjectSkillItem[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
@@ -36,6 +45,8 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
     async function loadContext() {
       setMcpLoading(true);
       setSkillsLoading(true);
+      setMcpStatus(null);
+      setMcpStatusTone(null);
 
       try {
         const [mcpRes, skillsRes] = await Promise.all([
@@ -45,9 +56,13 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
 
         if (mcpRes.ok) {
           const mcpData = await mcpRes.json();
-          setMcpContent(typeof mcpData.content === "string" ? mcpData.content : null);
+          const content =
+            typeof mcpData.content === "string" ? mcpData.content : null;
+          setMcpContent(content);
+          setMcpDraft(content ?? EMPTY_MCP_JSON);
         } else {
           setMcpContent(null);
+          setMcpDraft(EMPTY_MCP_JSON);
         }
 
         if (skillsRes.ok) {
@@ -73,6 +88,7 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
         }
       } catch {
         setMcpContent(null);
+        setMcpDraft(EMPTY_MCP_JSON);
         setSkills([]);
       } finally {
         setMcpLoading(false);
@@ -87,6 +103,46 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
     setSelectedSkill(skill);
     setSkillSheetOpen(true);
   }
+
+  async function handleSaveMcp() {
+    try {
+      setMcpSaving(true);
+      setMcpStatus(null);
+      setMcpStatusTone(null);
+
+      const res = await fetch(`/api/projects/${projectId}/mcp`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: mcpDraft }),
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(
+          typeof payload?.error === "string"
+            ? payload.error
+            : "Failed to save MCP config"
+        );
+      }
+
+      const content =
+        typeof payload?.content === "string" ? payload.content : mcpDraft;
+      setMcpContent(content);
+      setMcpDraft(content);
+      setMcpStatus("MCP configuration saved.");
+      setMcpStatusTone("success");
+    } catch (error) {
+      setMcpStatus(
+        error instanceof Error ? error.message : "Failed to save MCP config"
+      );
+      setMcpStatusTone("error");
+    } finally {
+      setMcpSaving(false);
+    }
+  }
+
+  const mcpBaseline = mcpContent ?? EMPTY_MCP_JSON;
+  const mcpDirty = mcpDraft !== mcpBaseline;
+  const mcpCanSave = mcpContent === null || mcpDirty;
 
   return (
     <>
@@ -104,15 +160,57 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
               <Loader2 className="size-4 animate-spin" />
               Loading MCP config...
             </div>
-          ) : !mcpContent ? (
-            <div className="p-4 text-sm text-muted-foreground">
-              No `servers.json` found for this project.
-            </div>
           ) : (
-            <div className="p-4">
-              <pre className="max-h-[360px] overflow-auto rounded-lg border bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap break-words">
-                {mcpContent}
-              </pre>
+            <div className="space-y-3 p-4">
+              {!mcpContent && (
+                <p className="text-xs text-muted-foreground">
+                  No `servers.json` found for this project. Save to create it.
+                </p>
+              )}
+              {mcpStatus && (
+                <div
+                  className={`rounded-md border px-3 py-2 text-xs ${
+                    mcpStatusTone === "error"
+                      ? "border-destructive/40 bg-destructive/10 text-destructive"
+                      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                  }`}
+                >
+                  {mcpStatus}
+                </div>
+              )}
+              <textarea
+                value={mcpDraft}
+                onChange={(e) => setMcpDraft(e.target.value)}
+                placeholder='{"mcpServers": {}}'
+                rows={10}
+                disabled={mcpSaving}
+                className="w-full rounded-lg border bg-muted/30 p-3 text-xs font-mono whitespace-pre-wrap focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-70"
+              />
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  onClick={handleSaveMcp}
+                  disabled={mcpSaving || !mcpCanSave}
+                  className="gap-2"
+                >
+                  {mcpSaving ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save"
+                  )}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setMcpDraft(mcpBaseline)}
+                  disabled={mcpSaving || !mcpDirty}
+                >
+                  Reset
+                </Button>
+              </div>
             </div>
           )}
         </div>
