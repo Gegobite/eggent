@@ -209,6 +209,7 @@ Main environment variables:
 | `TELEGRAM_BOT_TOKEN` | No | Telegram bot token |
 | `TELEGRAM_WEBHOOK_SECRET` | No (auto-generated in setup scripts) | Telegram webhook secret |
 | `TELEGRAM_DEFAULT_PROJECT_ID` | No | Default project for Telegram |
+| `TELEGRAM_MODE` | No | Telegram transport mode: `webhook` or `polling` |
 | `TELEGRAM_ALLOWED_USER_IDS` | No | Comma/space separated Telegram `user_id` allowlist |
 | `APP_BASE_URL` | Recommended | Public app URL used by integrations |
 | `APP_BIND_HOST` | No | Docker port bind host (default: `127.0.0.1`; set `0.0.0.0` for public access) |

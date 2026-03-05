@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 interface TelegramSettingsResponse {
   botToken: string;
   webhookSecret: string;
+  mode: "webhook" | "polling";
   publicBaseUrl: string;
   defaultProjectId: string;
   allowedUserIds: string[];
@@ -41,12 +42,36 @@ interface WebhookStatusResponse {
   error?: string;
 }
 
+interface PollingStatusResponse {
+  mode: "webhook" | "polling";
+  status: {
+    running: boolean;
+    startedAt: string | null;
+    lastPollAt: string | null;
+    lastError: string | null;
+    endpointBaseUrl: string | null;
+  };
+  error?: string;
+}
+
 type ActionState = "idle" | "loading";
 
 function sourceLabel(source: "stored" | "env" | "none"): string {
   if (source === "stored") return "stored in app";
   if (source === "env") return "from .env";
   return "not configured";
+}
+
+async function readJsonResponse<T>(res: Response): Promise<T> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const compact = text.replace(/\s+/g, " ").trim().slice(0, 160);
+    throw new Error(
+      `Expected JSON but got non-JSON response (${res.status}): ${compact || "<empty>"}`
+    );
+  }
 }
 
 export function TelegramIntegrationManager() {
@@ -58,6 +83,7 @@ export function TelegramIntegrationManager() {
   );
   const [allowedUserIdsInput, setAllowedUserIdsInput] = useState("");
   const [pendingAccessCodes, setPendingAccessCodes] = useState(0);
+  const [mode, setMode] = useState<"webhook" | "polling">("webhook");
   const [generatedAccessCode, setGeneratedAccessCode] = useState<string | null>(null);
   const [generatedAccessCodeExpiresAt, setGeneratedAccessCodeExpiresAt] = useState<
     string | null
@@ -66,9 +92,11 @@ export function TelegramIntegrationManager() {
   const [webhookStatus, setWebhookStatus] = useState<WebhookStatusResponse | null>(
     null
   );
+  const [pollingStatus, setPollingStatus] = useState<PollingStatusResponse | null>(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [connectState, setConnectState] = useState<ActionState>("idle");
   const [reconnectState, setReconnectState] = useState<ActionState>("idle");
+  const [applyModeState, setApplyModeState] = useState<ActionState>("idle");
   const [disconnectState, setDisconnectState] = useState<ActionState>("idle");
   const [saveAllowedUsersState, setSaveAllowedUsersState] = useState<ActionState>("idle");
   const [generateCodeState, setGenerateCodeState] = useState<ActionState>("idle");
@@ -83,7 +111,7 @@ export function TelegramIntegrationManager() {
       const res = await fetch("/api/integrations/telegram/config", {
         cache: "no-store",
       });
-      const data = (await res.json()) as TelegramSettingsResponse;
+      const data = await readJsonResponse<TelegramSettingsResponse>(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to load Telegram settings");
       }
@@ -91,6 +119,7 @@ export function TelegramIntegrationManager() {
       setPublicBaseUrl(data.publicBaseUrl || "");
       setTokenSource(data.sources.botToken);
       setAllowedUserIdsInput((data.allowedUserIds || []).join(", "));
+      setMode(data.mode || "webhook");
       setPendingAccessCodes(
         typeof data.pendingAccessCodes === "number" ? data.pendingAccessCodes : 0
       );
@@ -108,7 +137,7 @@ export function TelegramIntegrationManager() {
       const res = await fetch("/api/integrations/telegram/webhook", {
         cache: "no-store",
       });
-      const data = (await res.json()) as WebhookStatusResponse;
+      const data = await readJsonResponse<WebhookStatusResponse>(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to load webhook status");
       }
@@ -120,10 +149,26 @@ export function TelegramIntegrationManager() {
     }
   }, []);
 
+  const loadPollingStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/integrations/telegram/polling", {
+        cache: "no-store",
+      });
+      const data = await readJsonResponse<PollingStatusResponse>(res);
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to load polling status");
+      }
+      setPollingStatus(data);
+    } catch {
+      setPollingStatus(null);
+    }
+  }, []);
+
   useEffect(() => {
     loadSettings();
     loadWebhookStatus();
-  }, [loadSettings, loadWebhookStatus]);
+    loadPollingStatus();
+  }, [loadPollingStatus, loadSettings, loadWebhookStatus]);
 
   const connectTelegram = useCallback(async () => {
     setConnectState("loading");
@@ -133,7 +178,7 @@ export function TelegramIntegrationManager() {
       const trimmedToken = botToken.trim();
       const trimmedBaseUrl = publicBaseUrl.trim();
 
-      if (!trimmedBaseUrl) {
+      if (mode === "webhook" && !trimmedBaseUrl) {
         throw new Error("Public Base URL is required");
       }
       if (!trimmedToken && tokenSource === "none") {
@@ -145,10 +190,11 @@ export function TelegramIntegrationManager() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...(trimmedToken ? { botToken: trimmedToken } : {}),
+          mode,
           publicBaseUrl: trimmedBaseUrl,
         }),
       });
-      const saveConfigData = (await saveConfigRes.json()) as { error?: string };
+      const saveConfigData = await readJsonResponse<{ error?: string }>(saveConfigRes);
       if (!saveConfigRes.ok) {
         throw new Error(saveConfigData.error || "Failed to save Telegram settings");
       }
@@ -158,26 +204,27 @@ export function TelegramIntegrationManager() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           botToken: trimmedToken,
+          mode,
         }),
       });
-      const setupData = (await setupRes.json()) as {
+      const setupData = await readJsonResponse<{
         success?: boolean;
         message?: string;
         error?: string;
-      };
+      }>(setupRes);
       if (!setupRes.ok) {
         throw new Error(setupData.error || "Failed to connect Telegram");
       }
 
       setSuccess(setupData.message || "Telegram connected");
       setBotToken("");
-      await Promise.all([loadSettings(), loadWebhookStatus()]);
+      await Promise.all([loadSettings(), loadWebhookStatus(), loadPollingStatus()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to connect Telegram");
     } finally {
       setConnectState("idle");
     }
-  }, [botToken, loadSettings, loadWebhookStatus, publicBaseUrl, tokenSource]);
+  }, [botToken, loadPollingStatus, loadSettings, loadWebhookStatus, mode, publicBaseUrl, tokenSource]);
 
   const reconnectTelegram = useCallback(async () => {
     setReconnectState("loading");
@@ -187,25 +234,67 @@ export function TelegramIntegrationManager() {
       const res = await fetch("/api/integrations/telegram/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ mode }),
       });
-      const data = (await res.json()) as {
+      const data = await readJsonResponse<{
         success?: boolean;
         message?: string;
         error?: string;
-      };
+      }>(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to reconnect Telegram");
       }
 
       setSuccess(data.message || "Telegram reconnected");
-      await Promise.all([loadSettings(), loadWebhookStatus()]);
+      await Promise.all([loadSettings(), loadWebhookStatus(), loadPollingStatus()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to reconnect Telegram");
     } finally {
       setReconnectState("idle");
     }
-  }, [loadSettings, loadWebhookStatus]);
+  }, [loadPollingStatus, loadSettings, loadWebhookStatus, mode]);
+
+  const applyConnectionMode = useCallback(async () => {
+    setApplyModeState("loading");
+    setError(null);
+    setSuccess(null);
+    try {
+      const trimmedBaseUrl = publicBaseUrl.trim();
+      if (mode === "webhook" && !trimmedBaseUrl) {
+        throw new Error("Public Base URL is required for webhook mode");
+      }
+
+      const saveConfigRes = await fetch("/api/integrations/telegram/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          publicBaseUrl: trimmedBaseUrl,
+        }),
+      });
+      const saveConfigData = await readJsonResponse<{ error?: string }>(saveConfigRes);
+      if (!saveConfigRes.ok) {
+        throw new Error(saveConfigData.error || "Failed to save Telegram settings");
+      }
+
+      const setupRes = await fetch("/api/integrations/telegram/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+      });
+      const setupData = await readJsonResponse<{ error?: string; message?: string }>(setupRes);
+      if (!setupRes.ok) {
+        throw new Error(setupData.error || "Failed to apply Telegram mode");
+      }
+
+      setSuccess(setupData.message || "Telegram mode applied");
+      await Promise.all([loadSettings(), loadWebhookStatus(), loadPollingStatus()]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to apply mode");
+    } finally {
+      setApplyModeState("idle");
+    }
+  }, [loadPollingStatus, loadSettings, loadWebhookStatus, mode, publicBaseUrl]);
 
   const disconnectTelegram = useCallback(async () => {
     setDisconnectState("loading");
@@ -215,12 +304,12 @@ export function TelegramIntegrationManager() {
       const res = await fetch("/api/integrations/telegram/disconnect", {
         method: "POST",
       });
-      const data = (await res.json()) as {
+      const data = await readJsonResponse<{
         message?: string;
         note?: string | null;
         webhookWarning?: string | null;
         error?: string;
-      };
+      }>(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to disconnect Telegram");
       }
@@ -231,13 +320,13 @@ export function TelegramIntegrationManager() {
       setSuccess(messages.join(" "));
 
       setBotToken("");
-      await Promise.all([loadSettings(), loadWebhookStatus()]);
+      await Promise.all([loadSettings(), loadWebhookStatus(), loadPollingStatus()]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to disconnect Telegram");
     } finally {
       setDisconnectState("idle");
     }
-  }, [loadSettings, loadWebhookStatus]);
+  }, [loadPollingStatus, loadSettings, loadWebhookStatus]);
 
   const saveAllowedUsers = useCallback(async () => {
     setSaveAllowedUsersState("loading");
@@ -251,7 +340,7 @@ export function TelegramIntegrationManager() {
           allowedUserIds: allowedUserIdsInput,
         }),
       });
-      const data = (await res.json()) as TelegramSettingsResponse;
+      const data = await readJsonResponse<TelegramSettingsResponse>(res);
       if (!res.ok) {
         throw new Error(data.error || "Failed to save allowed users");
       }
@@ -259,6 +348,7 @@ export function TelegramIntegrationManager() {
       setPendingAccessCodes(
         typeof data.pendingAccessCodes === "number" ? data.pendingAccessCodes : 0
       );
+      setMode(data.mode || "webhook");
       setSuccess("Allowed Telegram user_id list updated");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save allowed users");
@@ -277,7 +367,7 @@ export function TelegramIntegrationManager() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      const data = (await res.json()) as TelegramAccessCodeResponse;
+      const data = await readJsonResponse<TelegramAccessCodeResponse>(res);
       if (!res.ok || !data.code) {
         throw new Error(data.error || "Failed to generate access code");
       }
@@ -296,19 +386,24 @@ export function TelegramIntegrationManager() {
   }, [loadSettings]);
 
   const hasTokenConfigured = tokenSource !== "none";
-  const hasBaseUrlConfigured = publicBaseUrl.trim().length > 0;
+  const hasBaseUrlConfigured = mode === "polling" ? true : publicBaseUrl.trim().length > 0;
   const isConnected = hasTokenConfigured && hasBaseUrlConfigured;
 
   const canConnect = useMemo(() => {
+    if (mode === "polling") {
+      if (botToken.trim()) return true;
+      return tokenSource !== "none";
+    }
     if (!publicBaseUrl.trim()) return false;
     if (botToken.trim()) return true;
     return tokenSource !== "none";
-  }, [botToken, publicBaseUrl, tokenSource]);
+  }, [botToken, mode, publicBaseUrl, tokenSource]);
 
   const isBusy =
     loadingSettings ||
     connectState === "loading" ||
     reconnectState === "loading" ||
+    applyModeState === "loading" ||
     disconnectState === "loading" ||
     saveAllowedUsersState === "loading" ||
     generateCodeState === "loading";
@@ -327,7 +422,7 @@ export function TelegramIntegrationManager() {
           <h3 className="text-lg font-medium">Telegram</h3>
           {!isConnected ? (
             <p className="text-sm text-muted-foreground">
-              Enter the bot token and Public Base URL, then click Connect Telegram.
+              Configure token and mode, then click Connect Telegram.
             </p>
           ) : (
             <p className="text-sm text-muted-foreground">
@@ -355,6 +450,23 @@ export function TelegramIntegrationManager() {
             </div>
 
             <div className="space-y-2">
+              <Label htmlFor="telegram-mode">Connection Mode</Label>
+              <select
+                id="telegram-mode"
+                value={mode}
+                onChange={(e) => setMode(e.target.value === "polling" ? "polling" : "webhook")}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                disabled={isBusy}
+              >
+                <option value="webhook">Webhook</option>
+                <option value="polling">Long polling</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Use polling when your app is not publicly reachable from Telegram.
+              </p>
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="telegram-public-base-url">Public Base URL</Label>
               <Input
                 id="telegram-public-base-url"
@@ -362,7 +474,7 @@ export function TelegramIntegrationManager() {
                 value={publicBaseUrl}
                 onChange={(e) => setPublicBaseUrl(e.target.value)}
                 placeholder="https://your-public-host.example.com"
-                disabled={isBusy}
+                disabled={isBusy || mode === "polling"}
               />
               <p className="text-xs text-muted-foreground">
                 Webhook endpoint:{" "}
@@ -388,10 +500,39 @@ export function TelegramIntegrationManager() {
           </>
         ) : (
           <>
+            <div className="space-y-2">
+              <Label htmlFor="telegram-mode-connected">Connection Mode</Label>
+              <select
+                id="telegram-mode-connected"
+                value={mode}
+                onChange={(e) => setMode(e.target.value === "polling" ? "polling" : "webhook")}
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm"
+                disabled={isBusy}
+              >
+                <option value="webhook">Webhook</option>
+                <option value="polling">Long polling</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="telegram-public-base-url-connected">Public Base URL</Label>
+              <Input
+                id="telegram-public-base-url-connected"
+                type="text"
+                value={publicBaseUrl}
+                onChange={(e) => setPublicBaseUrl(e.target.value)}
+                placeholder="https://your-public-host.example.com"
+                disabled={isBusy || mode === "polling"}
+              />
+            </div>
+
             <div className="rounded-md border bg-muted/20 p-3 text-sm space-y-1">
               <div>
                 Token source: {sourceLabel(tokenSource)}
                 {storedMaskedToken ? ` (${storedMaskedToken})` : ""}
+              </div>
+              <div>
+                Mode: <span className="font-mono text-xs">{mode}</span>
               </div>
               <div>
                 Public Base URL:{" "}
@@ -403,6 +544,20 @@ export function TelegramIntegrationManager() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={applyConnectionMode}
+                disabled={isBusy}
+              >
+                {applyModeState === "loading" ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Applying...
+                  </>
+                ) : (
+                  "Apply Mode"
+                )}
+              </Button>
               <Button
                 variant="outline"
                 onClick={reconnectTelegram}
@@ -518,7 +673,7 @@ export function TelegramIntegrationManager() {
         </div>
       </section>
 
-      {isConnected && (
+      {isConnected && mode === "webhook" && (
         <section className="rounded-lg border bg-card p-4 space-y-4">
           <div className="space-y-1">
             <h4 className="font-medium">Webhook Status</h4>
@@ -559,6 +714,34 @@ export function TelegramIntegrationManager() {
               {webhookStatus?.message || "Webhook status is not loaded yet."}
             </p>
           )}
+        </section>
+      )}
+
+      {isConnected && mode === "polling" && (
+        <section className="rounded-lg border bg-card p-4 space-y-4">
+          <div className="space-y-1">
+            <h4 className="font-medium">Polling Status</h4>
+            <p className="text-sm text-muted-foreground">
+              Current long-polling worker status.
+            </p>
+          </div>
+          <div className="rounded-md border bg-muted/20 p-3 text-sm space-y-1">
+            <div>Running: {pollingStatus?.status.running ? "yes" : "no"}</div>
+            {pollingStatus?.status.endpointBaseUrl && (
+              <div>
+                Endpoint:{" "}
+                <span className="font-mono text-xs break-all">
+                  {pollingStatus.status.endpointBaseUrl}
+                </span>
+              </div>
+            )}
+            {pollingStatus?.status.lastPollAt && (
+              <div>Last poll: {new Date(pollingStatus.status.lastPollAt).toLocaleString()}</div>
+            )}
+            {pollingStatus?.status.lastError && (
+              <div className="text-red-600">Last error: {pollingStatus.status.lastError}</div>
+            )}
+          </div>
         </section>
       )}
 

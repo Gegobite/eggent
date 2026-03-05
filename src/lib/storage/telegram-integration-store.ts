@@ -10,6 +10,7 @@ const TELEGRAM_SETTINGS_FILE = path.join(
 );
 
 export type TelegramConfigSource = "stored" | "env" | "none";
+export type TelegramIntegrationMode = "webhook" | "polling";
 
 interface TelegramAccessCodeRecord {
   hash: string;
@@ -20,6 +21,7 @@ interface TelegramAccessCodeRecord {
 interface TelegramIntegrationFileRecord {
   botToken?: string;
   webhookSecret?: string;
+  mode?: string;
   publicBaseUrl?: string;
   defaultProjectId?: string;
   allowedUserIds?: unknown;
@@ -31,6 +33,7 @@ interface TelegramIntegrationFileRecord {
 export interface TelegramIntegrationStoredSettings {
   botToken: string;
   webhookSecret: string;
+  mode: TelegramIntegrationMode;
   publicBaseUrl: string;
   defaultProjectId: string;
   allowedUserIds: string[];
@@ -42,6 +45,7 @@ export interface TelegramIntegrationStoredSettings {
 export interface TelegramIntegrationRuntimeConfig {
   botToken: string;
   webhookSecret: string;
+  mode: TelegramIntegrationMode;
   publicBaseUrl: string;
   defaultProjectId: string;
   allowedUserIds: string[];
@@ -196,6 +200,11 @@ function normalizeBaseUrl(value: string): string {
   }
 }
 
+function normalizeTelegramMode(value: unknown): TelegramIntegrationMode {
+  const raw = trimString(value).toLowerCase();
+  return raw === "polling" ? "polling" : "webhook";
+}
+
 function maskSecret(value: string): string {
   if (!value) return "";
   if (value.length <= 10) return "****";
@@ -227,6 +236,7 @@ function normalizeStoredRecord(
   return {
     botToken: trimString(record.botToken),
     webhookSecret: trimString(record.webhookSecret),
+    mode: normalizeTelegramMode(record.mode),
     publicBaseUrl: trimString(record.publicBaseUrl),
     defaultProjectId: trimString(record.defaultProjectId),
     allowedUserIds: normalizeAllowedUserIds(record.allowedUserIds),
@@ -255,6 +265,7 @@ export async function getTelegramIntegrationStoredSettings(): Promise<TelegramIn
 export async function saveTelegramIntegrationStoredSettings(input: {
   botToken?: string;
   webhookSecret?: string;
+  mode?: TelegramIntegrationMode;
   publicBaseUrl?: string;
   defaultProjectId?: string;
   allowedUserIds?: string[];
@@ -268,6 +279,8 @@ export async function saveTelegramIntegrationStoredSettings(input: {
     typeof input.webhookSecret === "string"
       ? input.webhookSecret.trim()
       : current.webhookSecret;
+  const nextMode =
+    input.mode === undefined ? current.mode : normalizeTelegramMode(input.mode);
   const nextPublicBaseUrl =
     typeof input.publicBaseUrl === "string"
       ? normalizeBaseUrl(input.publicBaseUrl)
@@ -289,6 +302,7 @@ export async function saveTelegramIntegrationStoredSettings(input: {
   const next: TelegramIntegrationStoredSettings = {
     botToken: nextBotToken,
     webhookSecret: nextWebhookSecret,
+    mode: nextMode,
     publicBaseUrl: nextPublicBaseUrl,
     defaultProjectId: nextDefaultProjectId,
     allowedUserIds: nextAllowedUserIds,
@@ -310,9 +324,11 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
   const envAllowedUserIds = parseAllowedUserIdsFromEnv(
     trimString(process.env.TELEGRAM_ALLOWED_USER_IDS)
   );
+  const envMode = normalizeTelegramMode(trimString(process.env.TELEGRAM_MODE));
 
   const botToken = stored.botToken || envBotToken;
   const webhookSecret = stored.webhookSecret || envWebhookSecret;
+  const mode = stored.mode || envMode;
   const publicBaseUrl = stored.publicBaseUrl || envPublicBaseUrl;
   const defaultProjectId = stored.defaultProjectId || envDefaultProjectId;
   const allowedUserIds = mergeAllowedUserIds(
@@ -334,6 +350,7 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
   return {
     botToken,
     webhookSecret,
+    mode,
     publicBaseUrl,
     defaultProjectId,
     allowedUserIds,
@@ -347,6 +364,7 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
 export async function getTelegramIntegrationPublicSettings(): Promise<{
   botToken: string;
   webhookSecret: string;
+  mode: TelegramIntegrationMode;
   publicBaseUrl: string;
   defaultProjectId: string;
   allowedUserIds: string[];
@@ -362,6 +380,7 @@ export async function getTelegramIntegrationPublicSettings(): Promise<{
   return {
     botToken: maskSecret(runtime.botToken),
     webhookSecret: maskSecret(runtime.webhookSecret),
+    mode: runtime.mode,
     publicBaseUrl: runtime.publicBaseUrl,
     defaultProjectId: runtime.defaultProjectId,
     allowedUserIds: runtime.allowedUserIds,
@@ -374,6 +393,7 @@ export async function getTelegramIntegrationPublicSettings(): Promise<{
 export async function saveTelegramIntegrationFromPublicInput(input: {
   botToken?: unknown;
   webhookSecret?: unknown;
+  mode?: unknown;
   publicBaseUrl?: unknown;
   defaultProjectId?: unknown;
   allowedUserIds?: unknown;
@@ -399,6 +419,10 @@ export async function saveTelegramIntegrationFromPublicInput(input: {
       : isMaskedValue(secretRaw)
         ? currentStored.webhookSecret
         : secretRaw;
+  const mode =
+    input.mode === undefined
+      ? undefined
+      : normalizeTelegramMode(input.mode);
 
   const publicBaseUrl =
     typeof input.publicBaseUrl === "string" ? input.publicBaseUrl : undefined;
@@ -411,6 +435,7 @@ export async function saveTelegramIntegrationFromPublicInput(input: {
   await saveTelegramIntegrationStoredSettings({
     botToken,
     webhookSecret,
+    mode,
     publicBaseUrl,
     defaultProjectId,
     allowedUserIds,

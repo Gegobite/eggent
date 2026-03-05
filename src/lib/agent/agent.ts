@@ -24,6 +24,145 @@ const MAX_TOOL_STEPS_SUBORDINATE = 15;
 const POLL_NO_PROGRESS_BLOCK_THRESHOLD = 16;
 const POLL_BACKOFF_SCHEDULE_MS = [5000, 10000, 30000, 60000] as const;
 
+function extractStatusCodeFromError(error: unknown): number {
+  if (typeof error !== "object" || !error || !("statusCode" in error)) {
+    return Number.NaN;
+  }
+  return Number((error as { statusCode?: unknown }).statusCode);
+}
+
+function normalizeCustomBaseUrl(rawBaseUrl: string): string {
+  const trimmed = rawBaseUrl.trim();
+  if (!trimmed) {
+    throw new Error("Custom model baseUrl is required");
+  }
+  const hasScheme = /^[a-z][a-z\d+\-.]*:\/\//i.test(trimmed);
+  const withScheme = hasScheme ? trimmed : `https://${trimmed}`;
+  const parsed = new URL(withScheme);
+  const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+  if (normalizedPath === "" || normalizedPath === "/") {
+    parsed.pathname = "/v1";
+  } else if (!normalizedPath.endsWith("/v1")) {
+    parsed.pathname = `${normalizedPath}/v1`;
+  }
+  return parsed.toString().replace(/\/$/, "");
+}
+
+async function runCustomPlainChatCompletion(params: {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  systemPrompt: string;
+  userMessage: string;
+  temperature: number;
+  maxTokens: number;
+  allowInsecureTls?: boolean;
+}): Promise<string> {
+  const prevTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  if (params.allowInsecureTls) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
+
+  try {
+    const response = await fetch(`${params.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: params.model,
+        messages: [
+          { role: "system", content: params.systemPrompt },
+          { role: "user", content: params.userMessage },
+        ],
+        stream: false,
+        temperature: params.temperature,
+        max_tokens: params.maxTokens,
+      }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+      | {
+          choices?: Array<{
+            message?: { content?: string | Array<{ type?: string; text?: string }> };
+          }>;
+          error?: { message?: string };
+        }
+      | null;
+
+    if (!response.ok) {
+      const providerError = payload?.error?.message?.trim() || "";
+      throw new Error(
+        `Custom provider fallback failed (${response.status})${providerError ? `: ${providerError}` : ""}`
+      );
+    }
+
+    const content = payload?.choices?.[0]?.message?.content;
+    if (typeof content === "string") {
+      return content.trim();
+    }
+    if (Array.isArray(content)) {
+      return content
+        .map((part) =>
+          part && part.type === "text" && typeof part.text === "string" ? part.text : ""
+        )
+        .join("")
+        .trim();
+    }
+    throw new Error("Custom provider fallback returned empty response");
+  } finally {
+    if (params.allowInsecureTls) {
+      if (prevTls === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
+      }
+    }
+  }
+}
+
+function sanitizeFallbackUserMessage(input: string): string {
+  const stripped = input.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, " ");
+  return stripped.length > 6000 ? stripped.slice(0, 6000) : stripped;
+}
+
+async function listCustomProviderModels(params: {
+  baseUrl: string;
+  apiKey: string;
+  allowInsecureTls?: boolean;
+}): Promise<string[]> {
+  const prevTls = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+  if (params.allowInsecureTls) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  }
+  try {
+    const response = await fetch(`${params.baseUrl}/models`, {
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+    });
+    if (!response.ok) return [];
+    const payload = (await response.json().catch(() => null)) as
+      | { data?: Array<{ id?: string }> }
+      | null;
+    const ids = Array.isArray(payload?.data)
+      ? payload.data
+          .map((item) => (typeof item?.id === "string" ? item.id.trim() : ""))
+          .filter(Boolean)
+      : [];
+    return ids;
+  } finally {
+    if (params.allowInsecureTls) {
+      if (prevTls === undefined) {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      } else {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTls;
+      }
+    }
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value == null || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -865,15 +1004,93 @@ export async function runAgentText(options: {
   });
 
   try {
-    const generated = await generateText({
-      model,
-      system: systemPrompt,
-      messages,
-      tools,
-      stopWhen: [stepCountIs(MAX_TOOL_STEPS_PER_TURN), hasToolCall("response")],
-      temperature: settings.chatModel.temperature ?? 0.7,
-      maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
-    });
+    let generated;
+    try {
+      generated = await generateText({
+        model,
+        system: systemPrompt,
+        messages,
+        tools,
+        stopWhen: [stepCountIs(MAX_TOOL_STEPS_PER_TURN), hasToolCall("response")],
+        temperature: settings.chatModel.temperature ?? 0.7,
+        maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
+      });
+    } catch (error) {
+      const statusCode = extractStatusCodeFromError(error);
+      const shouldRetryWithoutTools =
+        settings.chatModel.provider === "custom" && statusCode === 400;
+
+      if (!shouldRetryWithoutTools) {
+        throw error;
+      }
+
+      console.warn(
+        "[runAgentText] Custom provider returned 400 for tools request. Retrying without tools."
+      );
+
+      try {
+        generated = await generateText({
+          model,
+          system: systemPrompt,
+          messages,
+          temperature: settings.chatModel.temperature ?? 0.7,
+          maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
+        });
+      } catch (retryError) {
+        const retryStatusCode = extractStatusCodeFromError(retryError);
+        const shouldUseDirectFallback =
+          settings.chatModel.provider === "custom" && retryStatusCode === 400;
+        if (!shouldUseDirectFallback) {
+          throw retryError;
+        }
+
+        console.warn(
+          "[runAgentText] Custom provider returned 400 without tools. Falling back to raw chat/completions request."
+        );
+
+        const baseUrl = normalizeCustomBaseUrl(settings.chatModel.baseUrl || "");
+        const apiKey = settings.chatModel.apiKey || "";
+        const allowInsecureTls = settings.chatModel.allowInsecureTls;
+        let text: string;
+        try {
+          text = await runCustomPlainChatCompletion({
+            baseUrl,
+            apiKey,
+            model: settings.chatModel.model,
+            systemPrompt,
+            userMessage: options.userMessage,
+            temperature: settings.chatModel.temperature ?? 0.7,
+            maxTokens: settings.chatModel.maxTokens ?? 4096,
+            allowInsecureTls,
+          });
+        } catch (rawError) {
+          console.warn(
+            "[runAgentText] Raw custom fallback failed. Retrying with compact prompt/model auto-detection.",
+            rawError
+          );
+          const modelIds = await listCustomProviderModels({
+            baseUrl,
+            apiKey,
+            allowInsecureTls,
+          });
+          const selectedModel =
+            modelIds.find((id) => id === settings.chatModel.model) ||
+            modelIds[0] ||
+            settings.chatModel.model;
+          text = await runCustomPlainChatCompletion({
+            baseUrl,
+            apiKey,
+            model: selectedModel,
+            systemPrompt: "You are a helpful assistant. Reply clearly and concisely.",
+            userMessage: sanitizeFallbackUserMessage(options.userMessage),
+            temperature: 0.7,
+            maxTokens: Math.min(settings.chatModel.maxTokens ?? 4096, 1024),
+            allowInsecureTls,
+          });
+        }
+        generated = { text } as Awaited<ReturnType<typeof generateText>>;
+      }
+    }
 
     const text = generated.text ?? "";
 

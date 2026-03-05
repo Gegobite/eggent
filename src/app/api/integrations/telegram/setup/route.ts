@@ -6,7 +6,12 @@ import {
   getTelegramIntegrationRuntimeConfig,
   getTelegramIntegrationStoredSettings,
   saveTelegramIntegrationStoredSettings,
+  type TelegramIntegrationMode,
 } from "@/lib/storage/telegram-integration-store";
+import {
+  ensureTelegramPolling,
+  stopTelegramPolling,
+} from "@/lib/telegram/polling-runtime";
 
 interface TelegramApiResponse {
   ok?: boolean;
@@ -48,6 +53,29 @@ async function setTelegramWebhook(params: {
   }
 }
 
+async function deleteTelegramWebhook(botToken: string): Promise<void> {
+  const response = await fetch(`https://api.telegram.org/bot${botToken}/deleteWebhook`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      drop_pending_updates: false,
+    }),
+  });
+
+  const payload = (await response.json().catch(() => null)) as
+    | TelegramApiResponse
+    | null;
+  if (!response.ok || !payload?.ok) {
+    throw new Error(parseTelegramError(response.status, payload));
+  }
+}
+
+function normalizeMode(value: unknown): TelegramIntegrationMode {
+  return value === "polling" ? "polling" : "webhook";
+}
+
 function inferPublicBaseUrl(req: NextRequest): string {
   const forwardedHost = req.headers
     .get("x-forwarded-host")
@@ -80,6 +108,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as {
       botToken?: unknown;
+      mode?: unknown;
     };
     const inputToken =
       typeof body.botToken === "string" ? body.botToken.trim() : "";
@@ -89,6 +118,7 @@ export async function POST(req: NextRequest) {
     const storedToken = stored.botToken.trim();
 
     const botToken = inputToken || storedToken || runtime.botToken.trim();
+    const mode = normalizeMode(body.mode ?? stored.mode ?? runtime.mode);
     if (!botToken) {
       return Response.json(
         { error: "Telegram bot token is required" },
@@ -105,7 +135,7 @@ export async function POST(req: NextRequest) {
       runtime.publicBaseUrl.trim() ||
       inferPublicBaseUrl(req);
 
-    if (!publicBaseUrl) {
+    if (mode === "webhook" && !publicBaseUrl) {
       return Response.json(
         {
           error:
@@ -115,26 +145,44 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const webhookUrl = buildTelegramWebhookUrl(publicBaseUrl);
+    const webhookUrl = publicBaseUrl
+      ? buildTelegramWebhookUrl(publicBaseUrl)
+      : null;
 
     await saveTelegramIntegrationStoredSettings({
       botToken: inputToken ? botToken : storedToken || undefined,
       webhookSecret,
+      mode,
       publicBaseUrl,
       defaultProjectId: stored.defaultProjectId,
     });
 
-    await setTelegramWebhook({
-      botToken,
-      webhookUrl,
-      webhookSecret,
-    });
+    if (mode === "webhook") {
+      if (!webhookUrl) {
+        throw new Error("Public base URL is required for webhook mode");
+      }
+      await setTelegramWebhook({
+        botToken,
+        webhookUrl,
+        webhookSecret,
+      });
+      stopTelegramPolling();
+    } else {
+      await deleteTelegramWebhook(botToken);
+      await ensureTelegramPolling({
+        baseUrlHint: inferPublicBaseUrl(req),
+      });
+    }
 
     const settings = await getTelegramIntegrationPublicSettings();
 
     return Response.json({
       success: true,
-      message: "Telegram connected",
+      message:
+        mode === "polling"
+          ? "Telegram connected (polling mode)"
+          : "Telegram connected (webhook mode)",
+      mode,
       webhookUrl,
       settings,
     });

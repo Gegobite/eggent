@@ -33,8 +33,11 @@ function normalizeBaseUrl(rawBaseUrl: string | null, fallbackBaseUrl: string): s
         : `${LOCAL_HOSTNAMES.has(hostLike) ? "http" : "https"}://${rawValue}`;
 
     const url = new URL(withScheme);
-    if (url.pathname === "" || url.pathname === "/") {
+    const normalizedPath = url.pathname.replace(/\/+$/, "");
+    if (normalizedPath === "" || normalizedPath === "/") {
         url.pathname = "/v1";
+    } else if (!normalizedPath.endsWith("/v1")) {
+        url.pathname = `${normalizedPath}/v1`;
     }
     return url.toString().replace(/\/$/, "");
 }

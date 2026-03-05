@@ -40,7 +40,8 @@ export default function MessengersPage() {
                 </ul>
                 <p className="text-xs text-muted-foreground">
                   Notes: only private chats are supported. Uploaded files are saved into chat files,
-                  and you can ask the agent to send a local file back to Telegram.
+                  and you can ask the agent to send a local file back to Telegram. Integration
+                  supports both webhook and long-polling modes.
                 </p>
               </section>
 

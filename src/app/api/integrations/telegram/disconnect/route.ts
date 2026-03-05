@@ -4,6 +4,7 @@ import {
   getTelegramIntegrationStoredSettings,
   saveTelegramIntegrationStoredSettings,
 } from "@/lib/storage/telegram-integration-store";
+import { stopTelegramPolling } from "@/lib/telegram/polling-runtime";
 
 interface TelegramApiResponse {
   ok?: boolean;
@@ -61,9 +62,11 @@ export async function POST() {
     await saveTelegramIntegrationStoredSettings({
       botToken: "",
       webhookSecret: "",
+      mode: "webhook",
       publicBaseUrl: stored.publicBaseUrl,
       defaultProjectId: stored.defaultProjectId,
     });
+    stopTelegramPolling();
 
     const settings = await getTelegramIntegrationPublicSettings();
     const note =

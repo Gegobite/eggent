@@ -11,6 +11,7 @@ type OpenAICompatibleSettings = {
   fallbackBaseUrl?: string;
   baseUrlRequired?: boolean;
   defaultPath?: string;
+  enforceDefaultPathSuffix?: boolean;
 };
 
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
@@ -25,6 +26,7 @@ function normalizeBaseUrl(rawBaseUrl: string | undefined, settings: {
   fallbackBaseUrl?: string;
   baseUrlRequired?: boolean;
   defaultPath?: string;
+  enforceDefaultPathSuffix?: boolean;
 }): string | undefined {
   const rawValue = (rawBaseUrl || settings.fallbackBaseUrl || "").trim();
 
@@ -51,8 +53,17 @@ function normalizeBaseUrl(rawBaseUrl: string | undefined, settings: {
     );
   }
 
-  if (settings.defaultPath && (parsed.pathname === "" || parsed.pathname === "/")) {
-    parsed.pathname = settings.defaultPath;
+  if (settings.defaultPath) {
+    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
+    const normalizedDefaultPath = settings.defaultPath.replace(/\/+$/, "");
+    if (normalizedPath === "" || normalizedPath === "/") {
+      parsed.pathname = normalizedDefaultPath;
+    } else if (
+      settings.enforceDefaultPathSuffix &&
+      !normalizedPath.endsWith(normalizedDefaultPath)
+    ) {
+      parsed.pathname = `${normalizedPath}${normalizedDefaultPath}`;
+    }
   }
 
   return parsed.toString().replace(/\/$/, "");
@@ -140,6 +151,7 @@ export function createModel(config: ModelConfig): LanguageModel {
         apiKey: config.apiKey || "",
         baseUrlRequired: true,
         defaultPath: "/v1",
+        enforceDefaultPathSuffix: true,
       });
     }
 
@@ -186,6 +198,7 @@ export function createEmbeddingModel(config: {
         apiKey: config.apiKey || "",
         baseUrlRequired: true,
         defaultPath: "/v1",
+        enforceDefaultPathSuffix: true,
       });
 
     case "google": {
